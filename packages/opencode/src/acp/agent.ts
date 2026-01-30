@@ -23,8 +23,6 @@ import {
   type SetSessionModelRequest,
   type SetSessionModeRequest,
   type SetSessionModeResponse,
-  type ToolCallContent,
-  type ToolKind,
 } from "@agentclientprotocol/sdk"
 
 import { Log } from "../util/log"
@@ -40,6 +38,7 @@ import { z } from "zod"
 import { LoadAPIKeyError } from "ai"
 import type { Event, OpencodeClient, SessionMessageResponse } from "@opencode-ai/sdk/v2"
 import { applyPatch } from "diff"
+import { toolCallFromPart, toolResultFromPart } from "./tool-format"
 
 type ModeOption = { id: string; name: string; description?: string }
 type ModelOption = { modelId: string; name: string }
@@ -65,6 +64,7 @@ export namespace ACP {
     private eventAbort = new AbortController()
     private eventStarted = false
     private permissionQueues = new Map<string, Promise<void>>()
+    private emittedToolCalls = new Set<string>()
     private permissionOptions: PermissionOption[] = [
       { optionId: "once", kind: "allow_once", name: "Allow once" },
       { optionId: "always", kind: "allow_always", name: "Always allow" },
@@ -117,16 +117,17 @@ export namespace ACP {
             .then(async () => {
               const directory = session.cwd
 
+              const permissionInfo = toolCallFromPart(permission.permission, permission.metadata ?? {})
               const res = await this.connection
                 .requestPermission({
                   sessionId: permission.sessionID,
                   toolCall: {
                     toolCallId: permission.tool?.callID ?? permission.id,
                     status: "pending",
-                    title: permission.permission,
-                    rawInput: permission.metadata,
-                    kind: toToolKind(permission.permission),
-                    locations: toLocations(permission.permission, permission.metadata),
+                    title: permissionInfo.title,
+                    rawInput: permissionInfo.rawInput,
+                    kind: permissionInfo.kind,
+                    locations: permissionInfo.locations,
                   },
                   options: this.permissionOptions,
                 })
@@ -218,72 +219,38 @@ export namespace ACP {
           if (part.type === "tool") {
             switch (part.state.status) {
               case "pending":
-                await this.connection
-                  .sessionUpdate({
-                    sessionId,
-                    update: {
-                      sessionUpdate: "tool_call",
-                      toolCallId: part.callID,
-                      title: part.tool,
-                      kind: toToolKind(part.tool),
-                      status: "pending",
-                      locations: [],
-                      rawInput: {},
-                    },
-                  })
-                  .catch((error) => {
-                    log.error("failed to send tool pending to ACP", { error })
-                  })
                 return
 
-              case "running":
-                await this.connection
-                  .sessionUpdate({
-                    sessionId,
-                    update: {
-                      sessionUpdate: "tool_call_update",
-                      toolCallId: part.callID,
-                      status: "in_progress",
-                      kind: toToolKind(part.tool),
-                      title: part.tool,
-                      locations: toLocations(part.tool, part.state.input),
-                      rawInput: part.state.input,
-                    },
-                  })
-                  .catch((error) => {
-                    log.error("failed to send tool in_progress to ACP", { error })
-                  })
+              case "running": {
+                const toolCallId = part.callID
+                const info = toolCallFromPart(part.tool, part.state.input)
+
+                if (!this.emittedToolCalls.has(toolCallId)) {
+                  this.emittedToolCalls.add(toolCallId)
+                  await this.connection
+                    .sessionUpdate({
+                      sessionId,
+                      update: {
+                        sessionUpdate: "tool_call",
+                        toolCallId,
+                        title: info.title,
+                        kind: info.kind,
+                        status: "in_progress",
+                        locations: info.locations,
+                        rawInput: info.rawInput,
+                      },
+                    })
+                    .catch((error) => {
+                      log.error("failed to send tool_call to ACP", { error })
+                    })
+                }
                 return
+              }
 
               case "completed": {
-                const kind = toToolKind(part.tool)
-                const content: ToolCallContent[] = [
-                  {
-                    type: "content",
-                    content: {
-                      type: "text",
-                      text: part.state.output,
-                    },
-                  },
-                ]
-
-                if (kind === "edit") {
-                  const input = part.state.input
-                  const filePath = typeof input["filePath"] === "string" ? input["filePath"] : ""
-                  const oldText = typeof input["oldString"] === "string" ? input["oldString"] : ""
-                  const newText =
-                    typeof input["newString"] === "string"
-                      ? input["newString"]
-                      : typeof input["content"] === "string"
-                        ? input["content"]
-                        : ""
-                  content.push({
-                    type: "diff",
-                    path: filePath,
-                    oldText,
-                    newText,
-                  })
-                }
+                const input = part.state.input
+                const info = toolCallFromPart(part.tool, input)
+                const result = toolResultFromPart(part.tool, input, part.state.output, false)
 
                 if (part.tool === "todowrite") {
                   const parsedTodos = z.array(Todo.Info).safeParse(JSON.parse(part.state.output))
@@ -312,6 +279,8 @@ export namespace ACP {
                   }
                 }
 
+                this.emittedToolCalls.delete(part.callID)
+
                 await this.connection
                   .sessionUpdate({
                     sessionId,
@@ -319,14 +288,7 @@ export namespace ACP {
                       sessionUpdate: "tool_call_update",
                       toolCallId: part.callID,
                       status: "completed",
-                      kind,
-                      content,
-                      title: part.state.title,
-                      rawInput: part.state.input,
-                      rawOutput: {
-                        output: part.state.output,
-                        metadata: part.state.metadata,
-                      },
+                      rawOutput: result.rawOutput,
                     },
                   })
                   .catch((error) => {
@@ -334,7 +296,12 @@ export namespace ACP {
                   })
                 return
               }
-              case "error":
+              case "error": {
+                const input = part.state.input
+                const result = toolResultFromPart(part.tool, input, part.state.error, true)
+
+                this.emittedToolCalls.delete(part.callID)
+
                 await this.connection
                   .sessionUpdate({
                     sessionId,
@@ -342,27 +309,14 @@ export namespace ACP {
                       sessionUpdate: "tool_call_update",
                       toolCallId: part.callID,
                       status: "failed",
-                      kind: toToolKind(part.tool),
-                      title: part.tool,
-                      rawInput: part.state.input,
-                      content: [
-                        {
-                          type: "content",
-                          content: {
-                            type: "text",
-                            text: part.state.error,
-                          },
-                        },
-                      ],
-                      rawOutput: {
-                        error: part.state.error,
-                      },
+                      rawOutput: result.rawOutput,
                     },
                   })
                   .catch((error) => {
                     log.error("failed to send tool error to ACP", { error })
                   })
                 return
+              }
             }
           }
 
@@ -700,72 +654,58 @@ export namespace ACP {
 
       for (const part of message.parts) {
         if (part.type === "tool") {
+          const toolCallId = part.callID
+          const input = part.state.input
+          const info = toolCallFromPart(part.tool, input)
+
           switch (part.state.status) {
             case "pending":
-              await this.connection
-                .sessionUpdate({
-                  sessionId,
-                  update: {
-                    sessionUpdate: "tool_call",
-                    toolCallId: part.callID,
-                    title: part.tool,
-                    kind: toToolKind(part.tool),
-                    status: "pending",
-                    locations: [],
-                    rawInput: {},
-                  },
-                })
-                .catch((err) => {
-                  log.error("failed to send tool pending to ACP", { error: err })
-                })
               break
-            case "running":
-              await this.connection
-                .sessionUpdate({
-                  sessionId,
-                  update: {
-                    sessionUpdate: "tool_call_update",
-                    toolCallId: part.callID,
-                    status: "in_progress",
-                    kind: toToolKind(part.tool),
-                    title: part.tool,
-                    locations: toLocations(part.tool, part.state.input),
-                    rawInput: part.state.input,
-                  },
-                })
-                .catch((err) => {
-                  log.error("failed to send tool in_progress to ACP", { error: err })
-                })
-              break
-            case "completed":
-              const kind = toToolKind(part.tool)
-              const content: ToolCallContent[] = [
-                {
-                  type: "content",
-                  content: {
-                    type: "text",
-                    text: part.state.output,
-                  },
-                },
-              ]
-
-              if (kind === "edit") {
-                const input = part.state.input
-                const filePath = typeof input["filePath"] === "string" ? input["filePath"] : ""
-                const oldText = typeof input["oldString"] === "string" ? input["oldString"] : ""
-                const newText =
-                  typeof input["newString"] === "string"
-                    ? input["newString"]
-                    : typeof input["content"] === "string"
-                      ? input["content"]
-                      : ""
-                content.push({
-                  type: "diff",
-                  path: filePath,
-                  oldText,
-                  newText,
-                })
+            case "running": {
+              if (!this.emittedToolCalls.has(toolCallId)) {
+                this.emittedToolCalls.add(toolCallId)
+                await this.connection
+                  .sessionUpdate({
+                    sessionId,
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId,
+                      title: info.title,
+                      kind: info.kind,
+                      status: "in_progress",
+                      locations: info.locations,
+                      rawInput: info.rawInput,
+                    },
+                  })
+                  .catch((err) => {
+                    log.error("failed to send tool_call to ACP", { error: err })
+                  })
               }
+              break
+            }
+            case "completed": {
+              if (!this.emittedToolCalls.has(toolCallId)) {
+                this.emittedToolCalls.add(toolCallId)
+                await this.connection
+                  .sessionUpdate({
+                    sessionId,
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId,
+                      title: info.title,
+                      kind: info.kind,
+                      status: "in_progress",
+                      locations: info.locations,
+                      rawInput: info.rawInput,
+                    },
+                  })
+                  .catch((err) => {
+                    log.error("failed to send tool_call to ACP", { error: err })
+                  })
+              }
+              this.emittedToolCalls.delete(toolCallId)
+
+              const result = toolResultFromPart(part.tool, input, part.state.output, false)
 
               if (part.tool === "todowrite") {
                 const parsedTodos = z.array(Todo.Info).safeParse(JSON.parse(part.state.output))
@@ -799,51 +739,56 @@ export namespace ACP {
                   sessionId,
                   update: {
                     sessionUpdate: "tool_call_update",
-                    toolCallId: part.callID,
+                    toolCallId,
                     status: "completed",
-                    kind,
-                    content,
-                    title: part.state.title,
-                    rawInput: part.state.input,
-                    rawOutput: {
-                      output: part.state.output,
-                      metadata: part.state.metadata,
-                    },
+                    rawOutput: result.rawOutput,
                   },
                 })
                 .catch((err) => {
                   log.error("failed to send tool completed to ACP", { error: err })
                 })
               break
-            case "error":
+            }
+            case "error": {
+              if (!this.emittedToolCalls.has(toolCallId)) {
+                this.emittedToolCalls.add(toolCallId)
+                await this.connection
+                  .sessionUpdate({
+                    sessionId,
+                    update: {
+                      sessionUpdate: "tool_call",
+                      toolCallId,
+                      title: info.title,
+                      kind: info.kind,
+                      status: "in_progress",
+                      locations: info.locations,
+                      rawInput: info.rawInput,
+                    },
+                  })
+                  .catch((err) => {
+                    log.error("failed to send tool_call to ACP", { error: err })
+                  })
+              }
+
+              this.emittedToolCalls.delete(toolCallId)
+
+              const result = toolResultFromPart(part.tool, input, part.state.error, true)
+
               await this.connection
                 .sessionUpdate({
                   sessionId,
                   update: {
                     sessionUpdate: "tool_call_update",
-                    toolCallId: part.callID,
+                    toolCallId,
                     status: "failed",
-                    kind: toToolKind(part.tool),
-                    title: part.tool,
-                    rawInput: part.state.input,
-                    content: [
-                      {
-                        type: "content",
-                        content: {
-                          type: "text",
-                          text: part.state.error,
-                        },
-                      },
-                    ],
-                    rawOutput: {
-                      error: part.state.error,
-                    },
+                    rawOutput: result.rawOutput,
                   },
                 })
                 .catch((err) => {
                   log.error("failed to send tool error to ACP", { error: err })
                 })
               break
+            }
           }
         } else if (part.type === "text") {
           if (part.text) {
@@ -1300,53 +1245,6 @@ export namespace ACP {
         },
         { throwOnError: true },
       )
-    }
-  }
-
-  function toToolKind(toolName: string): ToolKind {
-    const tool = toolName.toLocaleLowerCase()
-    switch (tool) {
-      case "bash":
-        return "execute"
-      case "webfetch":
-        return "fetch"
-
-      case "edit":
-      case "patch":
-      case "write":
-        return "edit"
-
-      case "grep":
-      case "glob":
-      case "context7_resolve_library_id":
-      case "context7_get_library_docs":
-        return "search"
-
-      case "list":
-      case "read":
-        return "read"
-
-      default:
-        return "other"
-    }
-  }
-
-  function toLocations(toolName: string, input: Record<string, any>): { path: string }[] {
-    const tool = toolName.toLocaleLowerCase()
-    switch (tool) {
-      case "read":
-      case "edit":
-      case "write":
-        return input["filePath"] ? [{ path: input["filePath"] }] : []
-      case "glob":
-      case "grep":
-        return input["path"] ? [{ path: input["path"] }] : []
-      case "bash":
-        return []
-      case "list":
-        return input["path"] ? [{ path: input["path"] }] : []
-      default:
-        return []
     }
   }
 
