@@ -346,6 +346,7 @@ export namespace ProviderTransform {
     switch (model.api.npm) {
       case "@openrouter/ai-sdk-provider":
         if (!model.id.includes("gpt") && !model.id.includes("gemini-3")) return {}
+
         return Object.fromEntries(OPENAI_EFFORTS.map((effort) => [effort, { reasoning: { effort } }]))
 
       // TODO: YOU CANNOT SET max_tokens if this is set!!!
@@ -377,6 +378,11 @@ export namespace ProviderTransform {
       case "@ai-sdk/deepinfra":
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/deepinfra
       case "@ai-sdk/openai-compatible":
+        // Following logic for the `@ai-sdk/openai` case
+        if (id.includes("codex")) {
+          if (id.includes("5.2")) return Object.fromEntries([...WIDELY_SUPPORTED_EFFORTS, "xhigh"].map((effort) => [effort, { reasoning: { effort } }]))
+          return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoning: { effort } }]))
+        }
         return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
 
       case "@ai-sdk/azure":
