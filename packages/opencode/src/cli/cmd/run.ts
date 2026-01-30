@@ -50,6 +50,11 @@ export const RunCommand = cmd({
         describe: "session id to continue",
         type: "string",
       })
+      .option("fork-session", {
+        alias: ["F"],
+        describe: "fork the session before continuing (requires --continue or --session)",
+        type: "boolean",
+      })
       .option("share", {
         type: "boolean",
         describe: "share the session",
@@ -130,6 +135,11 @@ export const RunCommand = cmd({
 
     if (message.trim().length === 0 && !args.command) {
       UI.error("You must provide a message or a command")
+      process.exit(1)
+    }
+
+    if (args.forkSession && !args.continue && !args.session) {
+      UI.error("--fork-session requires --continue or --session")
       process.exit(1)
     }
 
@@ -279,11 +289,16 @@ export const RunCommand = cmd({
       const sdk = createOpencodeClient({ baseUrl: args.attach })
 
       const sessionID = await (async () => {
-        if (args.continue) {
-          const result = await sdk.session.list()
-          return result.data?.find((s) => !s.parentID)?.id
+        const baseID = args.continue
+          ? (await sdk.session.list()).data?.find((s) => !s.parentID)?.id
+          : args.session
+
+        if (baseID && args.forkSession) {
+          const forked = await sdk.session.fork({ sessionID: baseID })
+          return forked.data?.id
         }
-        if (args.session) return args.session
+
+        if (baseID) return baseID
 
         const title =
           args.title !== undefined
@@ -354,11 +369,16 @@ export const RunCommand = cmd({
       }
 
       const sessionID = await (async () => {
-        if (args.continue) {
-          const result = await sdk.session.list()
-          return result.data?.find((s) => !s.parentID)?.id
+        const baseID = args.continue
+          ? (await sdk.session.list()).data?.find((s) => !s.parentID)?.id
+          : args.session
+
+        if (baseID && args.forkSession) {
+          const forked = await sdk.session.fork({ sessionID: baseID })
+          return forked.data?.id
         }
-        if (args.session) return args.session
+
+        if (baseID) return baseID
 
         const title =
           args.title !== undefined

@@ -64,6 +64,11 @@ export const TuiThreadCommand = cmd({
         type: "string",
         describe: "session id to continue",
       })
+      .option("fork-session", {
+        alias: ["F"],
+        type: "boolean",
+        describe: "fork the session when continuing (use with --continue or --session)",
+      })
       .option("prompt", {
         type: "string",
         describe: "prompt to use",
@@ -73,6 +78,11 @@ export const TuiThreadCommand = cmd({
         describe: "agent to use",
       }),
   handler: async (args) => {
+    if (args.forkSession && !args.continue && !args.session) {
+      UI.error("--fork-session requires --continue or --session")
+      process.exit(1)
+    }
+
     // Resolve relative paths against PWD to preserve behavior when using --cwd flag
     const baseCwd = process.env.PWD ?? process.cwd()
     const cwd = args.project ? path.resolve(baseCwd, args.project) : process.cwd()
@@ -150,6 +160,7 @@ export const TuiThreadCommand = cmd({
         agent: args.agent,
         model: args.model,
         prompt,
+        fork: args.forkSession,
       },
       onExit: async () => {
         await client.call("shutdown", undefined)
