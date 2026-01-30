@@ -14,7 +14,7 @@ export namespace Database {
     PlanetscaleQueryResultHKT,
     PlanetScalePreparedQueryHKT,
     Record<string, never>,
-    ExtractTablesWithRelations<Record<string, never>>
+    ExtractTablesWithRelations<Record<string, never>, Record<string, never>>
   >
 
   const client = memo(() => {
@@ -23,7 +23,7 @@ export namespace Database {
       username: Resource.Database.username,
       password: Resource.Database.password,
     })
-    const db = drizzle(result, {})
+    const db = drizzle({ client: result })
     return db
   })
 

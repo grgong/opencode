@@ -26,6 +26,10 @@ import { EOL } from "os"
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
+import path from "path"
+import { Global } from "./global"
+import { JsonMigration } from "./storage/json-migration"
+import { Database } from "./storage/db"
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -74,6 +78,13 @@ const cli = yargs(hideBin(process.argv))
       version: Installation.VERSION,
       args: process.argv.slice(2),
     })
+
+    const marker = path.join(Global.Path.data, "opencode.db")
+    if (!(await Bun.file(marker).exists())) {
+      console.log("Performing one time database migration, may take a few minutes...")
+      await JsonMigration.run(Database.Client().$client)
+      console.log("Database migration complete.")
+    }
   })
   .usage("\n" + UI.logo())
   .completion("completion", "generate shell completion script")

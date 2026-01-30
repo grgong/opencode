@@ -103,12 +103,13 @@ export namespace SessionSummary {
         return files.has(x.file)
       }),
     )
-    await Session.update(input.sessionID, (draft) => {
-      draft.summary = {
+    await Session.setSummary({
+      sessionID: input.sessionID,
+      summary: {
         additions: diffs.reduce((sum, x) => sum + x.additions, 0),
         deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
         files: diffs.length,
-      }
+      },
     })
     await Storage.write(["session_diff", input.sessionID], diffs)
     Bus.publish(Session.Event.Diff, {

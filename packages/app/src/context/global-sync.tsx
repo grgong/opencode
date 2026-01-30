@@ -839,6 +839,23 @@ function createGlobalSync() {
         )
         break
       }
+      case "message.part.delta": {
+        const parts = store.part[event.properties.messageID]
+        if (!parts) break
+        const result = Binary.search(parts, event.properties.partID, (p) => p.id)
+        if (!result.found) break
+        setStore(
+          "part",
+          event.properties.messageID,
+          produce((draft) => {
+            const part = draft[result.index]
+            const field = event.properties.field as keyof typeof part
+            const existing = part[field] as string | undefined
+            ;(part[field] as string) = (existing ?? "") + event.properties.delta
+          }),
+        )
+        break
+      }
       case "message.part.removed": {
         const messageID = event.properties.messageID
         const parts = store.part[messageID]
