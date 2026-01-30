@@ -262,7 +262,7 @@ export namespace LLM {
         ],
       }),
       experimental_telemetry: {
-        isEnabled: cfg.experimental?.openTelemetry,
+        isEnabled: cfg.experimental?.openTelemetry ?? Flag.OPENCODE_ENABLE_OPENTELEMETRY,
         metadata: {
           userId: cfg.username ?? "unknown",
           sessionId: input.sessionID,

@@ -3,6 +3,13 @@ function truthy(key: string) {
   return value === "true" || value === "1"
 }
 
+function number(key: string) {
+  const value = process.env[key]
+  if (!value) return undefined
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
 export namespace Flag {
   export const OPENCODE_AUTO_SHARE = truthy("OPENCODE_AUTO_SHARE")
   export const OPENCODE_GIT_BASH_PATH = process.env["OPENCODE_GIT_BASH_PATH"]
@@ -16,6 +23,7 @@ export namespace Flag {
   export const OPENCODE_DISABLE_DEFAULT_PLUGINS = truthy("OPENCODE_DISABLE_DEFAULT_PLUGINS")
   export const OPENCODE_DISABLE_LSP_DOWNLOAD = truthy("OPENCODE_DISABLE_LSP_DOWNLOAD")
   export const OPENCODE_ENABLE_EXPERIMENTAL_MODELS = truthy("OPENCODE_ENABLE_EXPERIMENTAL_MODELS")
+  export const OPENCODE_ENABLE_OPENTELEMETRY = truthy("OPENCODE_ENABLE_OPENTELEMETRY")
   export const OPENCODE_DISABLE_AUTOCOMPACT = truthy("OPENCODE_DISABLE_AUTOCOMPACT")
   export const OPENCODE_DISABLE_MODELS_FETCH = truthy("OPENCODE_DISABLE_MODELS_FETCH")
   export const OPENCODE_DISABLE_CLAUDE_CODE = truthy("OPENCODE_DISABLE_CLAUDE_CODE")
@@ -47,13 +55,12 @@ export namespace Flag {
   export const OPENCODE_EXPERIMENTAL_PLAN_MODE = OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_PLAN_MODE")
   export const OPENCODE_EXPERIMENTAL_MARKDOWN = truthy("OPENCODE_EXPERIMENTAL_MARKDOWN")
   export const OPENCODE_MODELS_URL = process.env["OPENCODE_MODELS_URL"]
-
-  function number(key: string) {
-    const value = process.env[key]
-    if (!value) return undefined
-    const parsed = Number(value)
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
-  }
+  export const OPENCODE_EXPERIMENTAL_DISABLE_PASTE_SUMMARY =
+    OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_DISABLE_PASTE_SUMMARY")
+  export const OPENCODE_EXPERIMENTAL_BATCH_TOOL = OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_BATCH_TOOL")
+  export const OPENCODE_EXPERIMENTAL_CONTINUE_LOOP_ON_DENY =
+    OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_CONTINUE_LOOP_ON_DENY")
+  export const OPENCODE_EXPERIMENTAL_MCP_TIMEOUT_MS = number("OPENCODE_EXPERIMENTAL_MCP_TIMEOUT_MS")
 }
 
 // Dynamic getter for OPENCODE_DISABLE_PROJECT_CONFIG
