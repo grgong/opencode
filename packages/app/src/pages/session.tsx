@@ -690,6 +690,17 @@ export default function Page() {
       onSelect: () => dialog.show(() => <DialogSelectFile onOpenFile={() => showAllFiles()} />),
     },
     {
+      id: "tab.close",
+      title: language.t("command.tab.close"),
+      category: language.t("command.category.file"),
+      keybind: "mod+w",
+      disabled: !tabs().active(),
+      onSelect: () => {
+        const active = tabs().active()
+        if (active) tabs().close(active)
+      },
+    },
+    {
       id: "context.addSelection",
       title: language.t("command.context.addSelection"),
       description: language.t("command.context.addSelection.description"),

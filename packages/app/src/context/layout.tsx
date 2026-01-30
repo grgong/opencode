@@ -28,6 +28,7 @@ export function getAvatarColors(key?: string) {
 type SessionTabs = {
   active?: string
   all: string[]
+  history: string[]
 }
 
 type SessionView = {
@@ -621,7 +622,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           ),
         )
 
-        const tabs = createMemo(() => store.sessionTabs[key()] ?? { all: [] })
+        const tabs = createMemo(() => store.sessionTabs[key()] ?? { all: [], history: [] })
         return {
           tabs,
           active: createMemo(() => (tabs().active === "review" ? undefined : tabs().active)),
@@ -629,8 +630,12 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           setActive(tab: string | undefined) {
             const session = key()
             if (tab === "review") return
-            if (!store.sessionTabs[session]) {
-              setStore("sessionTabs", session, { all: [], active: tab })
+            const current = store.sessionTabs[session]
+            if (current?.active && current.active !== tab) {
+              setStore("sessionTabs", session, "history", [...(current.history ?? []), current.active])
+            }
+            if (!current) {
+              setStore("sessionTabs", session, { all: [], active: tab, history: [] })
             } else {
               setStore("sessionTabs", session, "active", tab)
             }
@@ -639,7 +644,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             const session = key()
             const next = all.filter((tab) => tab !== "review")
             if (!store.sessionTabs[session]) {
-              setStore("sessionTabs", session, { all: next, active: undefined })
+              setStore("sessionTabs", session, { all: next, active: undefined, history: [] })
             } else {
               setStore("sessionTabs", session, "all", next)
             }
@@ -647,14 +652,21 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           async open(tab: string) {
             if (tab === "review") return
             const session = key()
-            const current = store.sessionTabs[session] ?? { all: [] }
+            const current = store.sessionTabs[session] ?? { all: [], history: [] }
+
+            const pushHistory = () => {
+              if (current.active && current.active !== tab) {
+                setStore("sessionTabs", session, "history", [...(current.history ?? []), current.active])
+              }
+            }
 
             if (tab === "context") {
               const all = [tab, ...current.all.filter((x) => x !== tab)]
               if (!store.sessionTabs[session]) {
-                setStore("sessionTabs", session, { all, active: tab })
+                setStore("sessionTabs", session, { all, active: tab, history: [] })
                 return
               }
+              pushHistory()
               setStore("sessionTabs", session, "all", all)
               setStore("sessionTabs", session, "active", tab)
               return
@@ -662,18 +674,20 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
 
             if (!current.all.includes(tab)) {
               if (!store.sessionTabs[session]) {
-                setStore("sessionTabs", session, { all: [tab], active: tab })
+                setStore("sessionTabs", session, { all: [tab], active: tab, history: [] })
                 return
               }
+              pushHistory()
               setStore("sessionTabs", session, "all", [...current.all, tab])
               setStore("sessionTabs", session, "active", tab)
               return
             }
 
             if (!store.sessionTabs[session]) {
-              setStore("sessionTabs", session, { all: current.all, active: tab })
+              setStore("sessionTabs", session, { all: current.all, active: tab, history: [] })
               return
             }
+            pushHistory()
             setStore("sessionTabs", session, "active", tab)
           },
           close(tab: string) {
@@ -682,12 +696,14 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
             if (!current) return
 
             const all = current.all.filter((x) => x !== tab)
+            const history = (current.history ?? []).filter((x) => x !== tab)
+
             batch(() => {
               setStore("sessionTabs", session, "all", all)
+              setStore("sessionTabs", session, "history", history)
               if (current.active !== tab) return
 
-              const index = current.all.findIndex((f) => f === tab)
-              const next = all[index - 1] ?? all[0]
+              const next = history.pop() ?? all[0]
               setStore("sessionTabs", session, "active", next)
             })
           },
