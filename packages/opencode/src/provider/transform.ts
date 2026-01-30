@@ -66,6 +66,28 @@ export namespace ProviderTransform {
         .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
     }
 
+    // extract copilot's reasoning_opaque while preserving reasoning text
+    if (model.providerID.startsWith("github-copilot")) {
+      msgs = msgs.map((msg) => {
+        if (msg.role !== "assistant" || !Array.isArray(msg.content)) return msg
+
+        const opaque = msg.content
+          .filter((part: any) => part.type === "reasoning")
+          .map((part: any) => part.providerOptions?.openaiCompatible?.reasoning_opaque)
+          .find(Boolean)
+
+        if (!opaque) return msg
+
+        return {
+          ...msg,
+          providerOptions: {
+            ...msg.providerOptions,
+            openaiCompatible: { ...(msg.providerOptions as any)?.openaiCompatible, reasoning_opaque: opaque },
+          },
+        }
+      })
+    }
+
     if (model.api.id.includes("claude")) {
       return msgs.map((msg) => {
         if ((msg.role === "assistant" || msg.role === "tool") && Array.isArray(msg.content)) {
@@ -354,6 +376,14 @@ export namespace ProviderTransform {
         return Object.fromEntries(OPENAI_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
 
       case "@ai-sdk/github-copilot":
+        // Claude models on Copilot use thinking_budget (token count) instead of reasoningEffort
+        if (model.id.includes("claude")) {
+          return {
+            high: { thinking_budget: Math.min(16_000, Math.floor(model.limit.output / 2 - 1)) },
+            max: { thinking_budget: Math.min(31_999, model.limit.output - 1) },
+          }
+        }
+        // Non-Claude models use OpenAI-style reasoningEffort
         const copilotEfforts = iife(() => {
           if (id.includes("5.1-codex-max") || id.includes("5.2")) return [...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
           return WIDELY_SUPPORTED_EFFORTS
@@ -672,6 +702,13 @@ export namespace ProviderTransform {
       }
     }
 
+    if (npm === "@ai-sdk/github-copilot") {
+      const budget = typeof options?.["thinking_budget"] === "number" ? options["thinking_budget"] : 0
+      if (budget > 0) {
+        return Math.max(standardLimit, budget + 1)
+      }
+    }
+
     return standardLimit
   }
 
@@ -694,49 +731,58 @@ export namespace ProviderTransform {
     }
     */
 
-    // Convert integer enums to string enums for Google/Gemini
-    if (model.providerID === "google" || model.api.id.includes("gemini")) {
-      const sanitizeGemini = (obj: any): any => {
-        if (obj === null || typeof obj !== "object") {
-          return obj
-        }
-
-        if (Array.isArray(obj)) {
-          return obj.map(sanitizeGemini)
-        }
-
-        const result: any = {}
-        for (const [key, value] of Object.entries(obj)) {
-          if (key === "enum" && Array.isArray(value)) {
-            // Convert all enum values to strings
-            result[key] = value.map((v) => String(v))
-            // If we have integer type with enum, change type to string
-            if (result.type === "integer" || result.type === "number") {
-              result.type = "string"
-            }
-          } else if (typeof value === "object" && value !== null) {
-            result[key] = sanitizeGemini(value)
-          } else {
-            result[key] = value
-          }
-        }
-
-        // Filter required array to only include fields that exist in properties
-        if (result.type === "object" && result.properties && Array.isArray(result.required)) {
-          result.required = result.required.filter((field: any) => field in result.properties)
-        }
-
-        if (result.type === "array" && result.items == null) {
-          result.items = {}
-        }
-
-        return result
-      }
-
-      schema = sanitizeGemini(schema)
+    const isGemini = model.providerID === "google" || model.id.toLowerCase().includes("gemini")
+    if (isGemini) {
+      schema = sanitizeGeminiSchema(schema)
     }
 
     return schema
+  }
+
+  export function sanitizeGeminiSchema(obj: any): any {
+    if (obj === null || typeof obj !== "object") return obj
+    if (Array.isArray(obj)) return obj.map(sanitizeGeminiSchema)
+
+    const result: any = {}
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "type" && Array.isArray(value)) {
+        // gemini will 400 on union types with null
+        const types = value as string[]
+        const hasNull = types.includes("null")
+        const nonNullTypes = types.filter((t) => t !== "null")
+
+        if (hasNull && nonNullTypes.length === 1) {
+          result.type = nonNullTypes[0]
+          result.nullable = true
+        } else if (nonNullTypes.length === 1) {
+          result.type = nonNullTypes[0]
+        } else {
+          result.type = value
+        }
+      } else if (key === "enum" && Array.isArray(value)) {
+        // Convert all enum values to strings
+        result[key] = value.map((v) => String(v))
+        // If we have integer type with enum, change type to string
+        if (result.type === "integer" || result.type === "number") {
+          result.type = "string"
+        }
+      } else if (typeof value === "object" && value !== null) {
+        result[key] = sanitizeGeminiSchema(value)
+      } else {
+        result[key] = value
+      }
+    }
+
+    // Filter required array to only include fields that exist in properties
+    if (result.type === "object" && result.properties && Array.isArray(result.required)) {
+      result.required = result.required.filter((field: any) => field in result.properties)
+    }
+
+    if (result.type === "array" && result.items == null) {
+      result.items = {}
+    }
+
+    return result
   }
 
   export function error(providerID: string, error: APICallError) {
