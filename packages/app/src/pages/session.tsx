@@ -1761,7 +1761,7 @@ export default function Page() {
         <div
           classList={{
             "@container relative shrink-0 flex flex-col min-h-0 h-full bg-background-stronger": true,
-            "flex-1 pt-6 md:pt-3": true,
+            "flex-1 pt-0 md:pt-3": true,
             "md:flex-none": layout.fileTree.opened(),
           }}
           style={{
