@@ -62,6 +62,48 @@ export const ReadTool = Tool.define("read", {
 
     const instructions = await InstructionPrompt.resolve(ctx.messages, filepath, ctx.messageID)
 
+    // Check for images by extension first (handles uppercase extensions like .PNG, .JPG)
+    const ext = path.extname(filepath).toLowerCase()
+    const imageExts = new Set([".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tif", ".tiff"])
+    const isImageByExt = imageExts.has(ext)
+
+    // Get MIME type from extension for images (more reliable than Bun's MIME detection for uppercase)
+    const getImageMime = (e: string) => {
+      if (e === ".png") return "image/png"
+      if (e === ".jpg" || e === ".jpeg") return "image/jpeg"
+      if (e === ".gif") return "image/gif"
+      if (e === ".bmp") return "image/bmp"
+      if (e === ".webp") return "image/webp"
+      if (e === ".ico") return "image/x-icon"
+      if (e === ".tif" || e === ".tiff") return "image/tiff"
+      return "image/" + e.slice(1)
+    }
+
+    // Handle images by extension (including uppercase)
+    if (isImageByExt) {
+      const mime = getImageMime(ext)
+      const msg = `Image read successfully`
+      return {
+        title,
+        output: msg,
+        metadata: {
+          preview: msg,
+          truncated: false,
+          ...(instructions.length > 0 && { loaded: instructions.map((i) => i.filepath) }),
+        },
+        attachments: [
+          {
+            id: Identifier.ascending("part"),
+            sessionID: ctx.sessionID,
+            messageID: ctx.messageID,
+            type: "file",
+            mime,
+            url: `data:${mime};base64,${Buffer.from(await file.bytes()).toString("base64")}`,
+          },
+        ],
+      }
+    }
+
     // Exclude SVG (XML-based) and vnd.fastbidsheet (.fbs extension, commonly FlatBuffers schema files)
     const isImage =
       file.type.startsWith("image/") && file.type !== "image/svg+xml" && file.type !== "image/vnd.fastbidsheet"
